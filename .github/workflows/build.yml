@@ -1,0 +1,261 @@
+name: build-apk
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: اسم التطبيق
+        required: true
+      pkg:
+        description: معرّف قصير بالإنجليزي (مثال myshop)
+        required: true
+        default: myapp
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APP_NAME: ${{ inputs.name }}
+      PKG_IN: ${{ inputs.pkg }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - run: pip install pillow
+      - name: Generate Android project
+        run: |
+          mkdir -p android/app/src/main/java/com/htmlapp/shell
+          cat > android/settings.gradle <<'EOF_0'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "HtmlApp"
+          include ':app'
+          EOF_0
+          cat > android/build.gradle <<'EOF_1'
+          plugins { id 'com.android.application' version '8.5.0' apply false }
+          EOF_1
+          cat > android/gradle.properties <<'EOF_2'
+          org.gradle.jvmargs=-Xmx3g
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF_2
+          cat > android/app/build.gradle <<'EOF_3'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.htmlapp.shell'
+              compileSdk 34
+              defaultConfig {
+                  applicationId project.findProperty('appId') ?: 'com.htmlapp.sample'
+                  minSdk 23
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              buildTypes { release { minifyEnabled false; signingConfig signingConfigs.debug } }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+          }
+          dependencies { implementation 'androidx.webkit:webkit:1.10.0' }
+          EOF_3
+          cat > android/app/src/main/AndroidManifest.xml <<'EOF_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="@string/app_name"
+                  android:icon="@drawable/ic_launcher"
+                  android:roundIcon="@drawable/ic_launcher"
+                  android:supportsRtl="true"
+                  android:allowBackup="false"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize"
+                      android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|density|uiMode">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF_4
+          cat > android/app/src/main/java/com/htmlapp/shell/MainActivity.java <<'EOF_5'
+          package com.htmlapp.shell;
+
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.content.ActivityNotFoundException;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.*;
+          import android.widget.EditText;
+          import androidx.webkit.WebViewAssetLoader;
+
+          public class MainActivity extends Activity {
+              private static final String HOST = "appassets.androidplatform.net";
+              private static final String HOME = "https://" + HOST + "/assets/www/index.html";
+              private WebView web;
+              private ValueCallback<Uri[]> fileCb;
+
+              @Override protected void onCreate(Bundle saved) {
+                  super.onCreate(saved);
+                  web = new WebView(this);
+                  setContentView(web);
+                  final WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
+                          .setDomain(HOST)
+                          .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                          .build();
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                          return loader.shouldInterceptRequest(r.getUrl());
+                      }
+                      @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                          return !r.isForMainFrame() ? false : openOutside(r.getUrl());
+                      }
+                  });
+                  web.setDownloadListener((url, ua, cd, mime, len) -> openOutside(Uri.parse(url)));
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                          if (fileCb != null) fileCb.onReceiveValue(null);
+                          fileCb = cb;
+                          try { startActivityForResult(p.createIntent(), 1); }
+                          catch (ActivityNotFoundException e) { fileCb = null; return false; }
+                          return true;
+                      }
+                      @Override public boolean onJsAlert(WebView v, String u, String m, JsResult r) {
+                          new AlertDialog.Builder(MainActivity.this).setMessage(m)
+                                  .setPositiveButton(android.R.string.ok, (d, i) -> r.confirm())
+                                  .setOnCancelListener(d -> r.cancel()).show();
+                          return true;
+                      }
+                      @Override public boolean onJsConfirm(WebView v, String u, String m, JsResult r) {
+                          new AlertDialog.Builder(MainActivity.this).setMessage(m)
+                                  .setPositiveButton(android.R.string.ok, (d, i) -> r.confirm())
+                                  .setNegativeButton(android.R.string.cancel, (d, i) -> r.cancel())
+                                  .setOnCancelListener(d -> r.cancel()).show();
+                          return true;
+                      }
+                      @Override public boolean onJsPrompt(WebView v, String u, String m, String def, JsPromptResult r) {
+                          final EditText in = new EditText(MainActivity.this);
+                          in.setText(def);
+                          new AlertDialog.Builder(MainActivity.this).setMessage(m).setView(in)
+                                  .setPositiveButton(android.R.string.ok, (d, i) -> r.confirm(in.getText().toString()))
+                                  .setNegativeButton(android.R.string.cancel, (d, i) -> r.cancel())
+                                  .setOnCancelListener(d -> r.cancel()).show();
+                          return true;
+                      }
+                  });
+                  if (saved == null) web.loadUrl(HOME); else web.restoreState(saved);
+              }
+
+              private boolean openOutside(Uri u) {
+                  if (HOST.equals(u.getHost())) return false;
+                  try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception ignored) { }
+                  return true;
+              }
+
+              @Override protected void onActivityResult(int req, int res, Intent data) {
+                  if (req == 1 && fileCb != null) {
+                      fileCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
+                      fileCb = null;
+                  }
+              }
+              @Override protected void onSaveInstanceState(Bundle out) { super.onSaveInstanceState(out); web.saveState(out); }
+              @Override protected void onPause() { super.onPause(); web.onPause(); }
+              @Override protected void onResume() { super.onResume(); web.onResume(); }
+              @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }
+          }
+          EOF_5
+          cat > prepare.py <<'EOF_6'
+          import os, re, sys, shutil, zipfile
+          from xml.sax.saxutils import escape
+          from PIL import Image
+
+          ext = "zip" if os.path.exists("app.zip") else "html"
+          name = re.sub(r"[\x00-\x1f<>&\"'\\%@?]", "", os.environ.get("APP_NAME", "")).strip()[:40] or "تطبيقي"
+
+          app = "android/app/src/main"
+          www = f"{app}/assets/www"
+          shutil.rmtree(www, ignore_errors=True)
+          os.makedirs(www)
+          src = "app.zip" if ext == "zip" else "index.html"
+
+          if ext != "zip":
+              shutil.copy(src, f"{www}/index.html")
+          else:
+              total = 0
+              with zipfile.ZipFile(src) as z:
+                  if len(z.infolist()) > 3000:
+                      sys.exit("too many files")
+                  for i in z.infolist():
+                      p = os.path.normpath(i.filename)
+                      if i.is_dir() or p.startswith("/") or ".." in p.split(os.sep) or p.startswith("__MACOSX"):
+                          continue
+                      total += i.file_size
+                      if total > 150 * 1024 * 1024:
+                          sys.exit("too big")
+                      t = os.path.join(www, p)
+                      os.makedirs(os.path.dirname(t), exist_ok=True)
+                      with z.open(i) as s, open(t, "wb") as o:
+                          shutil.copyfileobj(s, o)
+              idx = [r for r, _, fs in os.walk(www) if "index.html" in fs]
+              if idx:
+                  root = min(idx, key=lambda r: r.count(os.sep))
+              else:
+                  h = [(r, f) for r, _, fs in os.walk(www) for f in fs if f.lower().endswith((".html", ".htm"))]
+                  if not h:
+                      sys.exit("no html in zip")
+                  root, f = min(h, key=lambda x: x[0].count(os.sep))
+                  os.rename(os.path.join(root, f), os.path.join(root, "index.html"))
+              if root != www:
+                  tmp = www + "_tmp"
+                  shutil.move(root, tmp)
+                  shutil.rmtree(www)
+                  shutil.move(tmp, www)
+
+          os.makedirs(f"{app}/res/values", exist_ok=True)
+          with open(f"{app}/res/values/strings.xml", "w", encoding="utf-8") as f:
+              f.write(f'<?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">{escape(name)}</string></resources>')
+
+          os.makedirs(f"{app}/res/drawable-nodpi", exist_ok=True)
+          try:
+              im = Image.open("icon.png").convert("RGBA")
+              s = min(im.size)
+              l, t = (im.width - s) // 2, (im.height - s) // 2
+              im = im.crop((l, t, l + s, t + s)).resize((432, 432))
+          except Exception:
+              im = Image.new("RGBA", (432, 432), (11, 110, 95, 255))
+          im.save(f"{app}/res/drawable-nodpi/ic_launcher.png")
+          print("ready:", name)
+          EOF_6
+      - name: Prepare files
+        run: |
+          test -f icon.png || { echo "icon.png is missing"; exit 1; }
+          test -f index.html -o -f app.zip || { echo "index.html or app.zip is missing"; exit 1; }
+          python3 prepare.py
+      - name: Build APK
+        working-directory: android
+        run: |
+          PKG=$(echo "$PKG_IN" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9')
+          case "$PKG" in [a-z]*) ;; *) PKG="a$PKG";; esac
+          gradle --no-daemon assembleRelease -PappId="com.htmlapp.$PKG"
+      - name: Publish APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk app.apk
+          gh release create "apk-${{ github.run_number }}" app.apk --title "$APP_NAME" --notes "تم بناء التطبيق"
