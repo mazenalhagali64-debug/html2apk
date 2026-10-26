@@ -1,0 +1,46 @@
+name: build-job
+on:
+  workflow_dispatch:
+    inputs:
+      id: { description: job id, required: true }
+      name: { description: app name, required: true }
+      ext: { description: html or zip, required: true }
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      JOB_ID: ${{ inputs.id }}
+      APP_NAME: ${{ inputs.name }}
+      EXT: ${{ inputs.ext }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.7" }
+      - run: pip install pillow
+      - name: Unpack template
+        run: echo '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' | base64 -d | tar xz
+      - run: python3 prepare.py
+      - name: Build APK
+        working-directory: android
+        run: gradle --no-daemon assembleRelease -PappId="com.htmlapp.$JOB_ID"
+      - name: Publish
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk "app-$JOB_ID.apk"
+          gh release create "job-$JOB_ID" "app-$JOB_ID.apk" --title "job-$JOB_ID" --notes ok
+      - name: Mark failure
+        if: failure()
+        run: gh release create "job-$JOB_ID" --title failed --notes failed || true
+      - name: Delete uploaded files
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -rq "jobs/$JOB_ID" || true
+          git commit -qm "cleanup $JOB_ID" || true
+          for i in 1 2 3 4 5; do git pull --rebase --autostash -q && git push -q && break; sleep 3; done
