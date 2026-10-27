@@ -1,0 +1,129 @@
+name: Build APK
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip and replace code
+        run: |
+          unzip -o MaxCam2.zip
+          cat > MaxCam/app/src/main/java/com/maxcam/MainActivity.kt <<'EOF'
+          package com.maxcam
+
+          import android.app.Activity
+          import android.content.ClipData
+          import android.content.ClipboardManager
+          import android.graphics.ImageFormat
+          import android.hardware.camera2.CameraCharacteristics
+          import android.hardware.camera2.CameraManager
+          import android.hardware.camera2.params.StreamConfigurationMap
+          import android.os.Build
+          import android.os.Bundle
+          import android.view.ViewGroup
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import android.widget.Toast
+
+          class MainActivity : Activity() {
+
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  val tv = TextView(this).apply {
+                      textSize = 12f; setTextColor(-1); setTextIsSelectable(true); setPadding(24, 24, 24, 24)
+                  }
+                  val btn = Button(this).apply { text = "نسخ التقرير" }
+                  val sv = ScrollView(this).apply { addView(tv) }
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(0xFF000000.toInt())
+                      setPadding(0, 110, 0, 40)
+                      addView(btn)
+                      addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                  }
+                  setContentView(root)
+
+                  val report = try { scan() } catch (e: Exception) { "خطأ: $e" }
+                  tv.text = report
+                  btn.setOnClickListener {
+                      (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
+                          .setPrimaryClip(ClipData.newPlainText("report", report))
+                      Toast.makeText(this, "تم النسخ", Toast.LENGTH_SHORT).show()
+                  }
+              }
+
+              private fun mp(w: Int, h: Int) = "%.1f".format(w.toLong() * h / 1e6)
+
+              private fun sizes(map: StreamConfigurationMap?, fmt: Int): String {
+                  return try {
+                      val a = map?.getOutputSizes(fmt)?.toMutableList() ?: mutableListOf()
+                      map?.getHighResolutionOutputSizes(fmt)?.let { a.addAll(it) }
+                      if (a.isEmpty()) "-" else a.sortedByDescending { it.width.toLong() * it.height }
+                          .distinct().take(3).joinToString(", ") { "${it.width}x${it.height} (${mp(it.width, it.height)}MP)" }
+                  } catch (e: Exception) { "err" }
+              }
+
+              private fun describe(c: CameraCharacteristics, title: String, sb: StringBuilder) {
+                  sb.append("== $title ==\n")
+                  val facing = when (c.get(CameraCharacteristics.LENS_FACING)) {
+                      CameraCharacteristics.LENS_FACING_BACK -> "خلفية"
+                      CameraCharacteristics.LENS_FACING_FRONT -> "أمامية"
+                      else -> "خارجية"
+                  }
+                  sb.append("الاتجاه: $facing\n")
+                  c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)?.let {
+                      sb.append("مصفوفة الحساس: ${it.width}x${it.height} (${mp(it.width, it.height)}MP)\n")
+                  }
+                  val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toList() ?: emptyList()
+                  sb.append("القدرات: $caps\n")
+                  sb.append("RAW: ${if (3 in caps) "نعم" else "لا"} | دقة فائقة: ${if (16 in caps) "نعم" else "لا"}\n")
+                  val n = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                  sb.append("[عادي] JPEG: ${sizes(n, ImageFormat.JPEG)}\n")
+                  sb.append("[عادي] RAW: ${sizes(n, ImageFormat.RAW_SENSOR)}\n")
+                  sb.append("[عادي] YUV: ${sizes(n, ImageFormat.YUV_420_888)}\n")
+                  val x = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
+                  if (x == null) sb.append("[قصوى] غير موجودة\n") else {
+                      sb.append("[قصوى] JPEG: ${sizes(x, ImageFormat.JPEG)}\n")
+                      sb.append("[قصوى] RAW: ${sizes(x, ImageFormat.RAW_SENSOR)}\n")
+                      sb.append("[قصوى] YUV: ${sizes(x, ImageFormat.YUV_420_888)}\n")
+                  }
+                  sb.append("\n")
+              }
+
+              private fun scan(): String {
+                  val m = getSystemService(CAMERA_SERVICE) as CameraManager
+                  val sb = StringBuilder()
+                  sb.append("${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE}\n")
+                  val listed = m.cameraIdList.toList()
+                  sb.append("الكاميرات المعلنة: $listed\n\n")
+                  for (id in listed) {
+                      val c = m.getCameraCharacteristics(id)
+                      describe(c, "كاميرا $id", sb)
+                      for (p in c.physicalCameraIds) {
+                          try { describe(m.getCameraCharacteristics(p), "  فيزيائية $p (ضمن $id)", sb) }
+                          catch (e: Exception) { sb.append("فيزيائية $p: تعذر القراءة\n\n") }
+                      }
+                  }
+                  for (i in 0..12) {
+                      val id = i.toString()
+                      if (id in listed) continue
+                      try { describe(m.getCameraCharacteristics(id), "مخفية $id", sb) } catch (e: Exception) { }
+                  }
+                  return sb.toString()
+              }
+          }
+          EOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - run: gradle assembleDebug -p MaxCam
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaxCamScan
+          path: MaxCam/app/build/outputs/apk/debug/*.apk
