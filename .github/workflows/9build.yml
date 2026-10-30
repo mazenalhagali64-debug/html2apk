@@ -1,0 +1,66 @@
+name: Build Studio Pro Capacitor 1
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Extract ONLY studio-pro-capacitor1.zip
+        run: |
+          mkdir project
+          
+          # تثبيت اسم الملف المطلوب حصراً وتجنب أي ملف آخر
+          TARGET_ZIP="studio-pro-capacitor1.zip"
+          
+          if [ -f "$TARGET_ZIP" ]; then
+            echo "Found and extracting: $TARGET_ZIP"
+            unzip -o "$TARGET_ZIP" -d project/
+          else
+            echo "Error: Target file '$TARGET_ZIP' not found in repository!"
+            exit 1
+          fi
+
+      - name: Build Android App
+        run: |
+          cd project
+          cd $(ls -d */ | head -n 1)
+          
+          if [ -f "package.json" ]; then
+            npm install
+            npx cap sync android || true
+          fi
+
+          if [ -d "android" ]; then
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          elif [ -f "gradlew" ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          fi
+
+      - name: Upload APK Result
+        uses: actions/upload-artifact@v3
+        with:
+          name: studio-pro-1-apk
+          path: |
+            project/**/android/app/build/outputs/apk/debug/*.apk
+            project/**/*.apk
